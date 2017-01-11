@@ -1,16 +1,17 @@
 #!/usr/bin/python3
 
-from os.path import exists, isfile, join, expanduser, basename, isdir
+from os.path import exists, isfile, join, expanduser, basename, isdir, dirname
 from shutil import copyfile, rmtree
 import sys
 from reportlab import platypus
+from reportlab.platypus import Paragraph
 from reportlab.lib.units import inch
+from reportlab.lib.styles import getSampleStyleSheet
 from PIL import Image
 from tempfile import mkdtemp
 from re import search
 from os import remove, listdir
 import argparse
-import subprocess
 
 A4_WIDTH_MM = 210 #A4 width (mm)
 A4_HEIGHT_MM = 297 #A4 height (mm)
@@ -27,27 +28,38 @@ PAGE_HEIGHT_MM = A4_HEIGHT_MM
 SCALE_FULL_A4 = 2.3
 SCALE_FULL = SCALE_FULL_A4
 #leave some white space around images
-SCALE_SPACED_A4 = 2.0
+SCALE_SPACED_A4 = 1.9
 SCALE_SPACED = SCALE_SPACED_A4
 #white spaces to put before and after each image (inches)
-SPACE_BEFORE_IMAGE = 0.45 #inch
-SPACE_AFTER_IMAGE = 0.45 #inch
+SPACE_BEFORE_IMAGE1 = 0.2 #inch
+SPACE_AFTER_IMAGE1 = 0.2 #inch
+SPACE_BEFORE_IMAGE2 = 0.4 #inch
+SPACE_AFTER_IMAGE2 = 0.2 #inch
+
+DESC_FILE_NAME = 'description.txt'
+PATH_DESC_MAP = {}
+DESC_DONE = {}
+styles = getSampleStyleSheet()
+style_heading1 = styles['Heading1']
 
 class PdfCreator:
-    def __init__(self, imagePaths, pdfPath = None, scale = SCALE_FULL,
-                 space_before_image = SPACE_BEFORE_IMAGE, 
-                 space_after_image = SPACE_AFTER_IMAGE):
-        if not imagePaths:
+    def __init__(self, src_images_path, dest_pdf_path = None, scale = SCALE_FULL,
+                 space_before_image1 = SPACE_BEFORE_IMAGE1, 
+                 space_after_image1 = SPACE_AFTER_IMAGE1,
+                 space_before_image2 = SPACE_BEFORE_IMAGE2, 
+                 space_after_image2 = SPACE_AFTER_IMAGE2):
+        if not src_images_path:
             print('No input images specified...exiting')
             sys.exit(1)
 
-        self.__imagePaths = imagePaths
+        self.__imagePaths = src_images_path
         self.__tempDir = mkdtemp()
-        self.__pdfPath = join(expanduser('~'), "workout.pdf") if not pdfPath else pdfPath
+        self.__pdfPath = join(expanduser('~'), "workout.pdf") if not dest_pdf_path else dest_pdf_path
         self.__scale = scale
-        self.__space_before_image = space_before_image
-        self.__space_after_image = space_after_image
-        self.__desc_file = 'desc.txt'
+        self.__space_before_image1 = space_before_image1
+        self.__space_after_image1 = space_after_image1
+        self.__space_before_image2 = space_before_image2
+        self.__space_after_image2 = space_after_image2
         
     @property
     def tempDir(self):
@@ -62,23 +74,26 @@ class PdfCreator:
         self.__tempDir = tempDir
 
     @property
-    def pdfPath(self):
+    def dest_pdf_path(self):
         return self.__pdfPath
 
-    def __prepare(self):
-        paths = list(filter(self.__condition, self.__imagePaths))
+    def __filterImgFiles(self):
+        paths = list(filter(self.__isImageFile, self.__imagePaths))
         if not len(paths):
             print("Error: there are no files for processing!")
             return None
-        tmpPaths = []
-        for src in paths:
-            dst = join(self.__tempDir, basename(src))
-            copyfile(src, dst)
-            tmpPaths.append(dst)
-        return tmpPaths
+        return paths
+    #removed because copying to temp files not really required
+#         tmpPaths = []
+#         for src in paths:
+#             dst = join(self.__tempDir, basename(src))
+#             copyfile(src, dst)
+#             tmpPaths.append(dst)
+#         return tmpPaths
 
+  
     #internal function to put 2 images per A4 sized PDF page in portrait mode
-    def __convert(self, imagePaths):
+    def __createPdfFromImages(self, src_images_path):
         doc = platypus.SimpleDocTemplate(self.__pdfPath)
         doc.leftMargin = 0
         doc.bottomMargin = 0
@@ -90,27 +105,45 @@ class PdfCreator:
         story = []
         hasStory = False
         i = 1;
-        for p in imagePaths:
+        for image_file in src_images_path:
             try:
-                pilImg = Image.open(p)
-                print('Adding ' + basename(p) + ' to pdf document...')
+                pilImg = Image.open(image_file)
+                print('Adding ' + basename(image_file) + ' to pdf document...')
             except Exception:
-                print('Cannot access a file: ' + p)
+                print('Cannot access a file: ' + image_file)
                 continue
 
             imageWidth = pilImg.size[0]
             print('imageWidth:', imageWidth)
             imageHeight = pilImg.size[1]
             print('imageHeight:', imageHeight)
+ 
+#           desc = 'Paragraph number
+            desc_file = join(dirname(image_file), DESC_FILE_NAME)
+            print('desc_file:', desc_file)
+            desc = None
+            if exists(desc_file):
+                desc = read_desc(desc_file);
+            print('desc:', desc)
+            if desc is not None and not DESC_DONE.get(desc_file, False):  
+                para = Paragraph(desc, style_heading1)  
+                story.append(para)
+                DESC_DONE[desc_file] = True
             
-            #put some space before first image on every page
-            if i % 2:
-                story.append(platypus.Spacer(1, self.__space_before_image * inch))
-            repImg = platypus.Image(p, pageWidth, 
+            #put different spaces before first and second images on every page
+            if not i % 2:
+                story.append(platypus.Spacer(1, self.__space_before_image1 * inch))
+            else:
+                story.append(platypus.Spacer(1, self.__space_before_image2 * inch))
+                
+            repImg = platypus.Image(image_file, pageWidth, 
                             pageWidth * (imageHeight/imageWidth))
             story.append(repImg)
             #put some space after every image
-            story.append(platypus.Spacer(1, self.__space_after_image * inch))
+            if not i % 2:
+                story.append(platypus.Spacer(1, self.__space_after_image1 * inch))
+            else:
+                story.append(platypus.Spacer(1, self.__space_after_image2 * inch))
 
             #break page after every 2 images
             if not i % 2:
@@ -127,15 +160,15 @@ class PdfCreator:
                 remove(self.__pdfPath)
         return hasStory
 
-    def create(self):
-        imagePaths = self.__prepare()
-        if not imagePaths:
+    def createPdf(self):
+        src_images_path = self.__filterImgFiles()
+        if not src_images_path:
             return False
-        result = self.__convert(imagePaths)
+        result = self.__createPdfFromImages(src_images_path)
         rmtree(self.__tempDir)
         return result
 
-    def __condition(self, p):
+    def __isImageFile(self, p):
         return exists(p) and isfile(p) and search(r'\.jpg$|\.bmp$|\.tiff$|\.png$|\.gif$|\.jpeg$', p) != None
 
 ########################################################################
@@ -143,8 +176,14 @@ class PdfCreator:
 def recursiveSearch(p, fps):
     def enumFilesInDir():
         _files = listdir(p)
+        desc_found = False
         for i in range(0, len(_files)):
-            _files[i] = join(p, _files[i])
+            file = _files[i]
+            _files[i] = join(p, file)
+            if not desc_found and exists(file) and isfile(file) and basename(file) == DESC_FILE_NAME:
+                PATH_DESC_MAP[p] = _files[i]
+                desc_found = True
+                            
         return _files
     files = enumFilesInDir()
     for f in files:
@@ -154,30 +193,32 @@ def recursiveSearch(p, fps):
         elif isfile(f):
             fps.append(f)
 
+# def recurse_create_pdf(p, fps):
+    
 
 def parseArgs():
     parser = argparse.ArgumentParser(description="img2pdf.py is very simple python script to convert "
                                                  "image files to a single pdf file (A4 paper size)")
     parser.add_argument("-d", "--directories",
                         help="search image files in specified directories (recursive search only)", type=str, nargs="+")
-    parser.add_argument("-f", "--files",
-                        help="image file names", type=str, nargs="+")
-    parser.add_argument("--printer",
-                        help="if this option is enabled, "
-                             "script create the pdf file and print it on a default printer", action="store_true")
+#     parser.add_argument("-f", "--files",
+#                         help="image file names", type=str, nargs="+")
+#     parser.add_argument("--printer",
+#                         help="if this option is enabled, "
+#                              "script createPdf the pdf file and print it on a default printer", action="store_true")
     parser.add_argument("--out",
                         help="Full path of the PDF file (~/workout.pdf is default) ", type=str)
     args = parser.parse_args()
 
-    filePaths = []
+    src_images_path = []
     if args.directories:
-        for dir in args.directories:
-            recursiveSearch(dir, filePaths)
-    if args.files:
-        for file in args.files:
-            assert exists(file) and isfile(file), "File or directory not found: " + file
-            filePaths.append(file)
-    return args.printer, filePaths, args.out
+        for src_dir in args.directories:
+            recursiveSearch(src_dir, src_images_path)
+#     if args.files:
+#         for file in args.files:
+#             assert exists(file) and isfile(file), "File or directory not found: " + file
+#             src_images_path.append(file)
+    return src_images_path, args.out
 
 ########################################################################
 #read and return text from description file in each images folder.  Description
@@ -191,9 +232,10 @@ def read_desc(file_name):
     
 if __name__ == "__main__":
     
-    isPrint, filePaths, pdfPath = parseArgs()
-    pdfCreator = PdfCreator(filePaths, pdfPath, SCALE_FULL, SPACE_BEFORE_IMAGE,
-                            SPACE_AFTER_IMAGE)
-    pdfCreator.create()
-    if isPrint:
-        subprocess.call(["lpr", pdfCreator.pdfPath])
+    src_images_path, dest_pdf_path = parseArgs()
+    pdfCreator = PdfCreator(src_images_path, dest_pdf_path, SCALE_FULL, 
+                            SPACE_BEFORE_IMAGE1, SPACE_AFTER_IMAGE1,
+                            SPACE_BEFORE_IMAGE2, SPACE_AFTER_IMAGE2)
+    pdfCreator.createPdf()
+#     if isPrint:
+#         subprocess.call(["lpr", pdfCreator.dest_pdf_path])
